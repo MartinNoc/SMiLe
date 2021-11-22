@@ -12,7 +12,8 @@
 
 #include "helpers.h"
 
-#include "matplotlibcpp.h"
+//#include "matplotlibcpp.h"
+#include <matplotlibcpp.h>
 
 namespace plt = matplotlibcpp;
 
@@ -556,6 +557,7 @@ vector<double> secure_dct(SEALContext context, vector<double> data) {
     return frequencies;
 }
 
+
 int main()
 {
     EncryptionParameters parms(scheme_type::ckks);
@@ -594,8 +596,8 @@ int main()
 
     vector<double> freqs = secure_dft(context, yraw);
     
-    // freqs[0] = 0;
     /*
+    freqs[0] = 0;
     plt::plot(freqs);
     plt::show();
     */

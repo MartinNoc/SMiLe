@@ -9,11 +9,8 @@
 #include <filesystem>
 namespace fs = std::filesystem;
 
-#include "matplotlibcpp.h"
-
 using namespace std;
 using namespace seal;
-namespace plt = matplotlibcpp;
 
 vector<double> read_csv(string filename, int nCols = 4, int ignoreRows = 2)
 {
@@ -135,11 +132,6 @@ int main()
 
         result_vec.push_back(result[0]);
     }
-
-    plt::plot(result_vec);
-    plt::grid(true);
-    plt::show();
-
 
     return 0;
 }

@@ -136,4 +136,6 @@ int main2()
 	encoder.decode(pt_result, vec_result);
 	cout << "Result: " << vec_result[0] << endl;
 	cout << "True result: " << inner_product(inputs.cbegin(), inputs.cend(), weights.cbegin(), 0.0) << endl;
+
+	return 0;
 }
