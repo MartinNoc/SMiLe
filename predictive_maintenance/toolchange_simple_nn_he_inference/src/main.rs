@@ -1,5 +1,7 @@
 use concrete::*;
+use csv::*;
 use tch::Tensor;
+use std::fs::File;
 
 fn test_he() -> anyhow::Result<()> {
     // generate a secret key
@@ -119,6 +121,22 @@ fn manual_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f
     Ok(output)
 }
 
+fn read_raw_data(path: &str) -> anyhow::Result<Reader<File>> {
+    let mut rdr = Reader::from_path(path)?;
+    Ok(rdr)
+}
+
+fn write_inferences(path: &str, inferences: &Vec<f64>) -> anyhow::Result<()> {
+    let mut wtr = csv::Writer::from_path(path)?;
+    
+    for i in inferences {
+        wtr.write_record(&[i.to_string()])?;
+    }
+    
+    wtr.flush()?;
+    Ok(())
+}
+
 fn inspect_encoder(c: &VectorLWE) {
     // print encoder properties for given vector of encrypted values
     for en in &c.encoders{
@@ -187,10 +205,10 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     
     // encrypt input
     let c = VectorLWE::encode_encrypt(&sk_in, &l0_input, &encoder)?;
-    println!("Initial encoder properties:");
-    inspect_encoder(&c);
+    //println!("Initial encoder properties:");
+    //inspect_encoder(&c);
     
-    println!("Multiplying hidden layer weights by functional bootstrap");
+    //println!("Multiplying hidden layer weights by functional bootstrap");
     let mut c128: Vec<VectorLWE> = Vec::with_capacity(128);
     for i in 0..8 {
         for j in 0..16 {
@@ -220,7 +238,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     */
     
     
-    println!("Adding up hidden layer, first round");
+    //println!("Adding up hidden layer, first round");
     for i in 0..8 {
         // Perform additions in a pyramid pattern to use padding optimally
     	let mut ops = 8;
@@ -248,7 +266,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     */
     
     
-    println!("Performing recovery bootstrap to free padding bits");
+    //println!("Performing recovery bootstrap to free padding bits");
     for i in 0..32 {
         let encoder_old = &c128[0].encoders[0];
         let encoder_out = Encoder::new(encoder_old.get_min(), encoder_old.get_max(), precision, padding)?;
@@ -268,7 +286,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     
     
     // Second round of additions of input layer
-    println!("Adding up hidden layer, second round");
+    //println!("Adding up hidden layer, second round");
     for i in 0..8 {
         // Continue pyramid where we left off
     	let mut ops = 2;
@@ -296,12 +314,12 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     */
     
     
-    println!("Performing functional bootstrap to add bias, apply ReLU, and multiply output layer weights");
+    //println!("Performing functional bootstrap to add bias, apply ReLU, and multiply output layer weights");
     let mut c8: Vec<VectorLWE> = Vec::with_capacity(8);
     for i in 0..8 {
         // Again we choose tight encoder interval and flip for negative weights
         let mut lower = 0.0;
-        let mut upper = 0.55;
+        let mut upper = 1.0;
         if w1[i] < 0.0 {
             lower = -upper;
             upper = 0.0;
@@ -322,7 +340,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     */
     
     
-    println!("Adding up output layer");
+    //println!("Adding up output layer");
     // Another pyramid pattern, this time we can do it in one go and use up all padding
     let mut ops = 4;
     let mut step = 2;
@@ -361,9 +379,36 @@ fn main() -> anyhow::Result<()> {
     let (sk_in, bsk, ksk) = he_load_keys()?;
     
     // perform a forward pass homomorphically encrypted
-    println!("\nHomomorphic forward pass:");
-    let homomorphic_output = he_forward_pass(&model, &example_input, &sk_in, &bsk, &ksk).expect("Error in homomorphic forward pass!");
-    println!("Expected: {}, Result: {}", manual_output, homomorphic_output);
+    //println!("\nHomomorphic forward pass:");
+    //let homomorphic_output = he_forward_pass(&model, &example_input, &sk_in, &bsk, &ksk).expect("Error in homomorphic forward pass!");
+    //println!("Expected: {}, Result: {}", manual_output, homomorphic_output);
+    
+    // do homomorphic inference on actual data
+    let mut rdr = read_raw_data("../sensitive_data/raw_data.csv").unwrap();
+    let mut counter = 0;
+    let start = 200;
+    let end = 300;
+    let mut inferences: Vec<f64> = Vec::with_capacity(end - start);
+    for result in rdr.records() {
+        let record = result?;
+        if counter >= start {
+            let mut buffer: [f32; 16] = [0.0; 16];
+            for i in 0..16 {
+                buffer[i] = record.get(i).unwrap().parse::<f32>()?;
+            }
+            let mut input_tensor = Tensor::of_slice(&buffer);
+            input_tensor = input_tensor.reshape(&[1, 16]);
+            inferences.push(he_forward_pass(&model, &input_tensor, &sk_in, &bsk, &ksk)?);
+            println!("{}: Expected inference {}", counter, manual_forward_pass(&model, &input_tensor)?);
+        }
+        
+        counter += 1;
+        if counter == end {
+            break;
+        }
+    }
+    write_inferences("../sensitive_data/200_to_300.csv", &inferences);
+    
     
     Ok(())
 }
