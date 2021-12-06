@@ -1,5 +1,7 @@
 use concrete::*;
+use csv::*;
 use tch::Tensor;
+use std::fs::File;
 
 fn test_he() -> anyhow::Result<()> {
     // generate a secret key
@@ -37,13 +39,13 @@ fn load_model(path: &str) -> anyhow::Result<tch::CModule> {
 }
 
 fn get_example_input() -> anyhow::Result<Tensor> {
-   // return hardcoded example input, should lead to output 0.1934
+   // return hardcoded example input, should lead to output 0.6701
    
    let example: [f32; 16] = [
-        0.7216, 0.3540, 0.8186, 0.0568,
-        0.2227, 0.4065, 0.1240, 0.8263,
-        0.8697, 0.7265, 0.1013, 0.7650,
-        0.2213, 0.1780, 0.2303, 0.0906];
+        0.7566, 0.8838, 0.6354, 0.9683,
+        0.1769, 0.2808, 0.5929, 0.8733,
+        0.9011, 0.2436, 0.2683, 0.5073,
+        0.8360, 0.8094, 0.8561, 0.2913];
     let mut example_tensor = Tensor::of_slice(&example);
     example_tensor = example_tensor.reshape(&[1, 16]);
     
@@ -52,7 +54,7 @@ fn get_example_input() -> anyhow::Result<Tensor> {
 
 fn test_nn() -> anyhow::Result<()> {
     // load model
-    let model = load_model("data/traced_simple_nn.pt")?;
+    let model = load_model("../traced_simple_nn.pt")?;
     
     // define example input and wrap into tensor
     let example_input = get_example_input()?;
@@ -61,7 +63,7 @@ fn test_nn() -> anyhow::Result<()> {
     let output = model.forward_ts(&[example_input])?;
     
     // print result compared to expected target
-    println!("Expected: {}, Result: {}", 0.1934, output.double_value(&[0]));
+    println!("Expected: {}, Result: {}", 0.6701, output.double_value(&[0]));
     
     Ok(())
 }
@@ -119,6 +121,22 @@ fn manual_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f
     Ok(output)
 }
 
+fn read_raw_data(path: &str) -> anyhow::Result<Reader<File>> {
+    let mut rdr = Reader::from_path(path)?;
+    Ok(rdr)
+}
+
+fn write_inferences(path: &str, inferences: &Vec<f64>) -> anyhow::Result<()> {
+    let mut wtr = csv::Writer::from_path(path)?;
+    
+    for i in inferences {
+        wtr.write_record(&[i.to_string()])?;
+    }
+    
+    wtr.flush()?;
+    Ok(())
+}
+
 fn inspect_encoder(c: &VectorLWE) {
     // print encoder properties for given vector of encrypted values
     for en in &c.encoders{
@@ -127,26 +145,8 @@ fn inspect_encoder(c: &VectorLWE) {
     }
 }
 
-fn he_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f64> {
-    // perform a homomorphically encrypted forward pass
-    
-    // get model parameters
-    let (w0, b0, w1, b1) = extract_model_parameters(model).unwrap();
-    
-    // convert to f64 for concrete
-    let w0: [f64; 128] = w0.map(|x| x as f64);
-    let b0: [f64; 8] = b0.map(|x| x as f64);
-    let w1: [f64; 8] = w1.map(|x| x as f64);
-    let b1: [f64; 1] = b1.map(|x| x as f64);
-    
-    // copy input into rust array
-    let mut l0_input: [f32; 16] = [0.0; 16];
-    input.copy_data(&mut l0_input, 16);
-    let l0_input: [f64; 16] = l0_input.map(|x| x as f64);
-    
-    /*
-    // key generation takes a while! Load the saved keys instead of regenerating after running once
-    // create secret keys
+fn he_generate_keys() -> anyhow::Result<(LWESecretKey, LWEBSK, LWEKSK)>
+{
     let rlwe_params = RLWEParams {dimension: 1, polynomial_size: 2048, log2_std_dev: -82};
     let lwe_params = LWEParams {dimension: 592, log2_std_dev: -23};
     
@@ -163,16 +163,38 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f64> 
     let ksk = LWEKSK::new(&sk_out, &sk_in, base_log, level);
     
     // save generated keys
-    sk_in.save("sk_in.json")?;
+    sk_in.save("sk_in.json").unwrap();
     bsk.save("bsk.json");
     ksk.save("ksk.json");
-    */
     
-    // load keys that were previously generated
+    Ok((sk_in, bsk, ksk))
+}
+
+fn he_load_keys() -> anyhow::Result<(LWESecretKey, LWEBSK, LWEKSK)>
+{
     let sk_in = LWESecretKey::load("sk_in.json").unwrap();
     let bsk = LWEBSK::load("bsk.json");
     let ksk = LWEKSK::load("ksk.json");
     
+    Ok((sk_in, bsk, ksk))
+}
+
+fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, bsk: &LWEBSK, ksk: &LWEKSK) -> anyhow::Result<f64> {
+    // perform a homomorphically encrypted forward pass
+    
+    // get model parameters
+    let (w0, b0, w1, b1) = extract_model_parameters(model).unwrap();
+    
+    // convert to f64 for concrete
+    let w0: [f64; 128] = w0.map(|x| x as f64);
+    let b0: [f64; 8] = b0.map(|x| x as f64);
+    let w1: [f64; 8] = w1.map(|x| x as f64);
+    let b1: [f64; 1] = b1.map(|x| x as f64);
+    
+    // copy input into rust array
+    let mut l0_input: [f32; 16] = [0.0; 16];
+    input.copy_data(&mut l0_input, 16);
+    let l0_input: [f64; 16] = l0_input.map(|x| x as f64);
     
     // create input encoder
     let min = 0.0;
@@ -183,16 +205,16 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f64> 
     
     // encrypt input
     let c = VectorLWE::encode_encrypt(&sk_in, &l0_input, &encoder)?;
-    println!("Initial encoder properties:");
-    inspect_encoder(&c);
+    //println!("Initial encoder properties:");
+    //inspect_encoder(&c);
     
-    println!("Multiplying hidden layer weights by functional bootstrap");
+    //println!("Multiplying hidden layer weights by functional bootstrap");
     let mut c128: Vec<VectorLWE> = Vec::with_capacity(128);
     for i in 0..8 {
         for j in 0..16 {
             // choose encoder interval to be tight around the values
             let mut lower = 0.0;
-            let mut upper = max * 0.5;
+            let mut upper = max * 0.45;
             // if we multiply with a negative weight the interval is flipped
             if w0[i*16 + j] < 0.0 {
                lower = -upper;
@@ -216,7 +238,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f64> 
     */
     
     
-    println!("Adding up hidden layer, first round");
+    //println!("Adding up hidden layer, first round");
     for i in 0..8 {
         // Perform additions in a pyramid pattern to use padding optimally
     	let mut ops = 8;
@@ -244,7 +266,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f64> 
     */
     
     
-    println!("Performing recovery bootstrap to free padding bits");
+    //println!("Performing recovery bootstrap to free padding bits");
     for i in 0..32 {
         let encoder_old = &c128[0].encoders[0];
         let encoder_out = Encoder::new(encoder_old.get_min(), encoder_old.get_max(), precision, padding)?;
@@ -264,7 +286,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f64> 
     
     
     // Second round of additions of input layer
-    println!("Adding up hidden layer, second round");
+    //println!("Adding up hidden layer, second round");
     for i in 0..8 {
         // Continue pyramid where we left off
     	let mut ops = 2;
@@ -292,12 +314,12 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f64> 
     */
     
     
-    println!("Performing functional bootstrap to add bias, apply ReLU, and multiply output layer weights");
+    //println!("Performing functional bootstrap to add bias, apply ReLU, and multiply output layer weights");
     let mut c8: Vec<VectorLWE> = Vec::with_capacity(8);
     for i in 0..8 {
         // Again we choose tight encoder interval and flip for negative weights
         let mut lower = 0.0;
-        let mut upper = 0.15;
+        let mut upper = 1.0;
         if w1[i] < 0.0 {
             lower = -upper;
             upper = 0.0;
@@ -318,7 +340,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor) -> anyhow::Result<f64> 
     */
     
     
-    println!("Adding up output layer");
+    //println!("Adding up output layer");
     // Another pyramid pattern, this time we can do it in one go and use up all padding
     let mut ops = 4;
     let mut step = 2;
@@ -346,16 +368,47 @@ fn main() -> anyhow::Result<()> {
     test_nn().expect("Error in neural network test!");
     
     // perform a forward pass fully manually
-    let model = load_model("data/traced_simple_nn.pt")?;
+    let model = load_model("../traced_simple_nn.pt")?;
     let example_input = get_example_input()?;
     println!("\nManual forward pass:");
     let manual_output = manual_forward_pass(&model, &example_input).expect("Error in manual forward pass!");
-    println!("Expected: {}, Result: {}", 0.1934, manual_output);
+    println!("Expected: {}, Result: {}", 0.6701, manual_output);
+    
+    // key generation takes a while! Load the saved keys instead of regenerating after running once
+    //let (sk_in, bsk, ksk) = he_generate_keys()?;
+    let (sk_in, bsk, ksk) = he_load_keys()?;
     
     // perform a forward pass homomorphically encrypted
-    println!("\nHomomorphic forward pass:");
-    let homomorphic_output = he_forward_pass(&model, &example_input).expect("Error in homomorphic forward pass!");
-    println!("Expected: {}, Result: {}", manual_output, homomorphic_output);
+    //println!("\nHomomorphic forward pass:");
+    //let homomorphic_output = he_forward_pass(&model, &example_input, &sk_in, &bsk, &ksk).expect("Error in homomorphic forward pass!");
+    //println!("Expected: {}, Result: {}", manual_output, homomorphic_output);
+    
+    // do homomorphic inference on actual data
+    let mut rdr = read_raw_data("../sensitive_data/raw_data.csv").unwrap();
+    let mut counter = 0;
+    let start = 200;
+    let end = 300;
+    let mut inferences: Vec<f64> = Vec::with_capacity(end - start);
+    for result in rdr.records() {
+        let record = result?;
+        if counter >= start {
+            let mut buffer: [f32; 16] = [0.0; 16];
+            for i in 0..16 {
+                buffer[i] = record.get(i).unwrap().parse::<f32>()?;
+            }
+            let mut input_tensor = Tensor::of_slice(&buffer);
+            input_tensor = input_tensor.reshape(&[1, 16]);
+            inferences.push(he_forward_pass(&model, &input_tensor, &sk_in, &bsk, &ksk)?);
+            println!("{}: Expected inference {}", counter, manual_forward_pass(&model, &input_tensor)?);
+        }
+        
+        counter += 1;
+        if counter == end {
+            break;
+        }
+    }
+    write_inferences("../sensitive_data/200_to_300.csv", &inferences);
+    
     
     Ok(())
 }

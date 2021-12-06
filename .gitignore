@@ -1,3 +1,15 @@
+# Ubuntu tilde files
+*~
+
+## Rust projects
+**/Cargo.lock
+# rustfmt backup files
+**/*.rs.bk
+# MSVC Windows builds of rustc generate these, which store debugging infos - should not need it but anyway
+*.pdb
+
+
+
 ## VS projects
 # cache directory
 **/.vs/

@@ -1,0 +1,7 @@
+# rust specific gitignore
+# some are already listed in the "root" gitignore
+
+# compiled files and executables
+target/
+debug/
+release/

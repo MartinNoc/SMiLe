@@ -1,13 +1,11 @@
 [package]
-name = "toolchange_simple_nn_he"
+name = "io_test"
 version = "0.1.0"
-edition = "2021"
+edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-concrete = "0.1.11"
-itertools = "0.10.1"
-tch = "0.6.1"
-anyhow = "1.0.8"
-csv = "1.1"
+csv = "1"
+serde = "1"
+serde_derive = "1"
