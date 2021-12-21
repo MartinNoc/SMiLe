@@ -12,8 +12,9 @@ import (
 )
 
 func main() {
+    customBootstrapping()
 
-    test()
+    // printQs()
 
     // multiplicationChain()
 
@@ -24,19 +25,29 @@ func main() {
     // levelError()
 }
 
-func test() {
 
+func customBootstrapping() {
+
+    // params := getCkksParams(4)
+	// btpParams := getBootstrappingParams(4)
     params := getSimpleParams()
+    btpParams := getCustomBootstrappingParams(params.Q(), params.Scale())
+
+    fmt.Printf(" \n", btpParams.SlotsToCoeffsParameters.ScalingFactor)
+
+
     keygen := ckks.NewKeyGenerator(params)
-    sk, pk := keygen.GenKeyPair()
+    sk, pk := keygen.GenKeyPairSparse(btpParams.H)
     rlk := keygen.GenRelinearizationKey(sk, 2)
     encoder := ckks.NewEncoder(params)
     encryptor := ckks.NewEncryptor(params, pk)
     decryptor := ckks.NewDecryptor(params, sk)
-    evaluator := ckks.NewEvaluator(params, rlwe.EvaluationKey{Rlk: rlk})
+    // evaluator := ckks.NewEvaluator(params, rlwe.EvaluationKey{Rlk: rlk})
+    _ = pk
 
-    /*
-    btpParams := getSimpleBootstrappingParams()
+    printBtsLevels(btpParams)
+
+    // Bootstrapping Keys
     fmt.Printf("Generate bootstrapping keys ... ")
     rotations := btpParams.RotationsForBootstrapping(params.LogN(), params.LogSlots())
     rotkeys := keygen.GenRotationKeysForRotations(rotations, true, sk)
@@ -45,39 +56,98 @@ func test() {
         panic(err)
     }
     fmt.Printf("Done \n")
-    */
 
-    fmt.Printf("Q0: %x \n", params.QiFloat64(0))
-
-    // Plaintexts
     values := make([]complex128, params.Slots())
-    factors := make([]complex128, params.Slots())
 
     for i := range values {
         values[i] = complex(1, 0)
-        factors[i] = complex(2, 0)
     }
 
-    // Encode and Encrypt
-    ct   := encryptor.EncryptNew(encoder.EncodeNew(values , params.LogSlots()))
-    ct_f := encryptor.EncryptNew(encoder.EncodeNew(factors, params.LogSlots()))
+    ct := encryptor.EncryptNew(encoder.EncodeNew(values , params.LogSlots()))
 
-    _ = evaluator
-    _ = ct_f
-    _ = decryptor
-    _ = ct
-
-
-    /*
-    // Bootstrap # 1
+    // Bootstrapping
     fmt.Printf("Bootstrapping ... ")
-    ct_btp1 := btp.Bootstrapp(ct)
-    fmt.Printf("Done --> Level: %d, Scale: %f \n", ct_btp1.Level(), math.Log2(ct_btp1.Scale))
+    ct_new := btp.Bootstrapp(ct)
+    fmt.Printf("Done --> Level: %d, Scale: %f \n", ct_new.Level(), ct_new.Scale)
 
-    z := encoder.Decode(decryptor.DecryptNew(ct_btp1), params.LogSlots())
+    z := encoder.Decode(decryptor.DecryptNew(ct_new), params.LogSlots())
     fmt.Printf("ct_new[0] = %f \n", real(z[0]))
-    */
+}
 
+func printBtsLevels(btpParams bootstrapping.Parameters) {
+    fmt.Printf("              StartLvl Depth Depth(false) \n")
+    fmt.Printf("SlotsToCoeffs:   %2d      %d      %d \n", btpParams.SlotsToCoeffsParameters.LevelStart, btpParams.SlotsToCoeffsParameters.Depth(true), btpParams.SlotsToCoeffsParameters.Depth(false))
+    fmt.Printf("EvalModParams:   %2d      %d \n", btpParams.EvalModParameters.LevelStart, btpParams.EvalModParameters.Depth())
+    fmt.Printf("CoeffsToSlots:   %2d      %d      %d \n", btpParams.CoeffsToSlotsParameters.LevelStart, btpParams.CoeffsToSlotsParameters.Depth(true), btpParams.CoeffsToSlotsParameters.Depth(false))
+}
+
+func getSimpleParams() (ckks.Parameters) {
+    params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
+        LogN: 15,
+        LogQ: []int{60,40,40,40,40,40,40,40,40,40},
+        LogP: []int{60,60,60},
+        Sigma: rlwe.DefaultSigma,
+        LogSlots: 10,
+        Scale: float64(1<<40),
+    })
+    if err != nil {
+        panic(err)
+    }
+
+    return params
+}
+
+func getCustomBootstrappingParams(Q []uint64, scale float64) (bootstrapping.Parameters) {
+    lenQ := len(Q)
+
+    params := bootstrapping.Parameters{
+        H: 192,
+        SlotsToCoeffsParameters: advanced.EncodingMatrixLiteral{
+			LinearTransformType: advanced.SlotsToCoeffs,
+			LevelStart:          lenQ-7, // index
+			BSGSRatio:           2.0,
+			BitReversed:         false,
+			ScalingFactor: [][]float64{
+                {float64(Q[lenQ-8])},
+                {float64(Q[lenQ-7])}, // Q[index]
+			},
+		},
+		EvalModParameters: advanced.EvalModLiteral{
+			Q:             Q[0], // Q[0]
+			LevelStart:    lenQ-3,    // index
+			SineType:      advanced.Cos1,
+			MessageRatio:  256.0, // Q[0] / |m|
+			K:             20, // interpolation [-K,K]
+			SineDeg:       10,
+			DoubleAngle:   0,
+			ArcSineDeg:    0,
+			ScalingFactor: scale, // Scale
+		},
+		CoeffsToSlotsParameters: advanced.EncodingMatrixLiteral{
+			LinearTransformType: advanced.CoeffsToSlots,
+			LevelStart:          lenQ-1, // index
+			BSGSRatio:           2.0,
+			BitReversed:         false,
+			ScalingFactor: [][]float64{
+				{float64(Q[lenQ-2])}, // Q[-2]
+				{float64(Q[lenQ-1])}, // Q[-1]
+			},
+		},
+    }
+
+    return params
+}
+
+func printQs() {
+
+    params := getSimpleParams()
+
+    Qs := params.Q()
+    fmt.Printf("len(Q) = %d \n", len(Qs))
+
+    for i,q := range Qs {
+        fmt.Printf("Q[%d] = %x \n", i, q)
+    }
 }
 
 func multiplicationChain() {
@@ -91,18 +161,6 @@ func multiplicationChain() {
     encryptor := ckks.NewEncryptor(params, pk)
     decryptor := ckks.NewDecryptor(params, sk)
     evaluator := ckks.NewEvaluator(params, rlwe.EvaluationKey{Rlk: rlk})
-
-    btpParams := getSimpleBootstrappingParams()
-    fmt.Printf("Generate bootstrapping keys ... ")
-    rotations := btpParams.RotationsForBootstrapping(params.LogN(), params.LogSlots())
-    rotkeys := keygen.GenRotationKeysForRotations(rotations, true, sk)
-    btp, err := bootstrapping.NewBootstrapper(params, btpParams, rlwe.EvaluationKey{Rlk: rlk, Rtks: rotkeys})
-    if err != nil {
-        panic(err)
-    }
-    fmt.Printf("Done \n")
-
-    _ = btp
 
     // Plaintexts
     values := make([]complex128, params.Slots())
@@ -119,7 +177,7 @@ func multiplicationChain() {
 
 
     // Mult Chain
-    fmt.Printf("Level: %d, %d; ct[0] = %7.3f, scale: %.1f \n", ct.Level(), ct_f.Level(), real(values[0]), math.Log2(ct.Scale))
+    fmt.Printf("Level: %2d, %2d; ct[0] = %7.2f, scale: %.1f \n", ct.Level(), ct_f.Level(), real(values[0]), math.Log2(ct.Scale))
     var z []complex128
     for ct.Level() > 0 {
         evaluator.MulRelin(ct, ct_f, ct)
@@ -127,65 +185,8 @@ func multiplicationChain() {
             panic(err)
         }
         z = encoder.Decode(decryptor.DecryptNew(ct), params.LogSlots())
-        fmt.Printf("Level: %d, %d; ct[0] = %7.3f, scale: %.1f \n", ct.Level(), ct_f.Level(), real(z[0]), math.Log2(ct.Scale))
+        fmt.Printf("Level: %2d, %2d; ct[0] = %7.2f, scale: %.1f \n", ct.Level(), ct_f.Level(), real(z[0]), math.Log2(ct.Scale))
     }
-
-}
-
-func getSimpleParams() (ckks.Parameters) {
-    params, err := ckks.NewParametersFromLiteral(ckks.ParametersLiteral{
-        LogN: 14,
-        LogQ: []int{60,40,40,40,40,40,40,40,40},
-        LogP: []int{60},
-        Sigma: rlwe.DefaultSigma,
-        LogSlots: 9,
-        Scale: float64(1<<40),
-    })
-    if err != nil {
-        panic(err)
-    }
-
-    return params
-
-}
-
-func getSimpleBootstrappingParams() (bootstrapping.Parameters) {
-
-    params := bootstrapping.Parameters{
-        H: 192,
-        SlotsToCoeffsParameters: advanced.EncodingMatrixLiteral{
-			LinearTransformType: advanced.SlotsToCoeffs,
-			LevelStart:          3,
-			BSGSRatio:           2.0,
-			BitReversed:         false,
-			ScalingFactor: [][]float64{
-				{1073741823.9998779, 1073741823.9998779},
-			},
-		},
-		EvalModParameters: advanced.EvalModLiteral{
-			Q:             0x1fff90001,
-			LevelStart:    11,
-			SineType:      advanced.Cos1,
-			MessageRatio:  256.0,
-			K:             40,
-			SineDeg:       63,
-			DoubleAngle:   2,
-			ArcSineDeg:    0,
-			ScalingFactor: 1 << 40,
-		},
-		CoeffsToSlotsParameters: advanced.EncodingMatrixLiteral{
-			LinearTransformType: advanced.CoeffsToSlots,
-			LevelStart:          13,
-			BSGSRatio:           2.0,
-			BitReversed:         false,
-			ScalingFactor: [][]float64{
-				{0x1fffffff50001},
-				{0x1ffffffea0001},
-			},
-		},
-    }
-
-    return params
 }
 
 func getCkksParams(paramSet int) (ckks.Parameters) {
@@ -273,8 +274,6 @@ func myBootstrapping() {
 
     z = encoder.Decode(decryptor.DecryptNew(ct_2nd), params.LogSlots())
     fmt.Printf("ct_2nd[0] = %f \n", real(z[0]))
-
-
 }
 
 func vectorDiff() {
@@ -369,7 +368,6 @@ func levelError() {
     /*
     evaluator.Power(ct1, 2, ct1)
     */
-
 }
 
 func printDebug(params ckks.Parameters, ciphertext *ckks.Ciphertext, valuesWant []complex128, decryptor ckks.Decryptor, encoder ckks.Encoder) (valuesTest []complex128) {
