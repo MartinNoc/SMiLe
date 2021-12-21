@@ -3,6 +3,9 @@ package main
 import (
     "fmt"
     "math"
+    "time"
+    "os"
+    "strconv"
 
     "github.com/ldsec/lattigo/v2/ckks"
     "github.com/ldsec/lattigo/v2/rlwe"
@@ -12,7 +15,28 @@ import (
 )
 
 func main() {
-    customBootstrapping()
+    args := os.Args[1:]
+
+    if len(args) < 1 {
+        panic("Invalid number of arguments")
+    }
+
+    paramSet, err := strconv.Atoi(args[0])
+    if err != nil {
+        panic(err)
+    }
+
+    if len(args) >=2 {
+        slots, err := strconv.Atoi(args[1])
+        if err != nil {
+            panic(err)
+        }
+        bootstrapTime(paramSet, slots)
+    } else {
+        bootstrapTime(paramSet, 0)
+    }
+
+    // customBootstrapping()
 
     // printQs()
 
@@ -25,6 +49,52 @@ func main() {
     // levelError()
 }
 
+
+func bootstrapTime(paramSet int, logSlots int) {
+    var start time.Time
+
+    i := paramSet
+
+    fmt.Printf("Parameter Set %d: \n", i)
+    fmt.Printf("Key Generation ... ")
+
+    // ckksParams := getCkksParamsWithSlots(i, logSlots)
+    ckksParams := getCkksParams(4)
+
+    fmt.Printf("with logSlots = %d \n", ckksParams.LogSlots())
+
+    btpParams := getBootstrappingParams(i)
+    keygen := ckks.NewKeyGenerator(ckksParams)
+    sk, pk := keygen.GenKeyPairSparse(btpParams.H)
+    rlk := keygen.GenRelinearizationKey(sk, 2)
+    encoder := ckks.NewEncoder(ckksParams)
+    encryptor := ckks.NewEncryptor(ckksParams, pk)
+    // decryptor := ckks.NewDecryptor(ckksParams, sk)
+
+    rotations := btpParams.RotationsForBootstrapping(ckksParams.LogN(), ckksParams.LogSlots())
+    rotkeys := keygen.GenRotationKeysForRotations(rotations, true, sk)
+    btp, err := bootstrapping.NewBootstrapper(ckksParams, btpParams, rlwe.EvaluationKey{Rlk: rlk, Rtks: rotkeys})
+    if err != nil {
+        panic(err)
+    }
+
+    fmt.Println("Ciphertext generation ...")
+    values := make([]complex128, ckksParams.Slots())
+
+    for i := range values {
+        values[i] = complex(1, 0)
+    }
+    ct := encryptor.EncryptNew(encoder.EncodeNew(values, ckksParams.LogSlots()))
+
+    // Bootstrapping
+    fmt.Println("Bootstrapping ...")
+    start = time.Now()
+    ct_new := btp.Bootstrapp(ct)
+    fmt.Printf("Done in %s \n", time.Since(start))
+    fmt.Println()
+
+    _ = ct_new
+}
 
 func customBootstrapping() {
 
@@ -189,17 +259,27 @@ func multiplicationChain() {
     }
 }
 
-func getCkksParams(paramSet int) (ckks.Parameters) {
+func getCkksParamsWithSlots(paramSet int, logSlots int) (ckks.Parameters) {
     if paramSet < 0 || paramSet > 4 {
         panic("Invalid CKKS Param Set Index")
     }
 
-    params, err := ckks.NewParametersFromLiteral(bootstrapping.DefaultCKKSParameters[paramSet])
+    p := bootstrapping.DefaultCKKSParameters[paramSet]
+
+    if logSlots > 0 {
+        p.LogSlots = logSlots
+    }
+
+    params, err := ckks.NewParametersFromLiteral(p)
     if err != nil {
         panic(err)
     }
 
     return params
+}
+
+func getCkksParams(paramSet int) (ckks.Parameters) {
+    return getCkksParamsWithSlots(paramSet, 0)
 }
 
 func getBootstrappingParams(paramSet int) (bootstrapping.Parameters) {
