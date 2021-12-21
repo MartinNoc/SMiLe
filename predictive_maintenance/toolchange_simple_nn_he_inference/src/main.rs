@@ -2,6 +2,7 @@ use concrete::*;
 use csv::*;
 use tch::Tensor;
 use std::fs::File;
+use std::time::Instant;
 
 fn test_he() -> anyhow::Result<()> {
     // generate a secret key
@@ -155,8 +156,8 @@ fn he_generate_keys() -> anyhow::Result<(LWESecretKey, LWEBSK, LWEKSK)>
     let sk_out = sk_rlwe.to_lwe_secret_key();
     
     // create bootstrapping key
-    let base_log: usize = 4;
-    let level: usize = 6;
+    let base_log: usize = 6;
+    let level: usize = 4;
     let bsk = LWEBSK::new(&sk_in, &sk_rlwe, base_log, level);
     
     // create key switching key
@@ -199,52 +200,30 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     // create input encoder
     let min = 0.0;
     let max = 1.0;
-    let precision = 4;
-    let padding = 3;
-    let encoder = Encoder::new(min, max, precision, padding)?;
+    let precision = 6;
+    let encoder = Encoder::new(min, max, precision, 11)?;
     
     // encrypt input
-    let c = VectorLWE::encode_encrypt(&sk_in, &l0_input, &encoder)?;
-    //println!("Initial encoder properties:");
-    //inspect_encoder(&c);
+    let mut c: Vec<LWE> = Vec::with_capacity(16);
+    for i in 0..16 {
+        c.push(LWE::encode_encrypt(&sk_in, l0_input[i], &encoder)?);
+    }
     
-    //println!("Multiplying hidden layer weights by functional bootstrap");
-    let mut c128: Vec<VectorLWE> = Vec::with_capacity(128);
+    //println!("Multiplying hidden layer weights");
+    let mut c128: Vec<LWE> = Vec::with_capacity(128);
     for i in 0..8 {
         for j in 0..16 {
-            // choose encoder interval to be tight around the values
-            let mut lower = 0.0;
-            let mut upper = max * 0.45;
-            // if we multiply with a negative weight the interval is flipped
-            if w0[i*16 + j] < 0.0 {
-               lower = -upper;
-               upper = 0.0;
-            }
-            
-            let encoder_mult = Encoder::new(lower, upper, precision, padding)?;
-            c128.push(c.bootstrap_nth_with_function(&bsk, |x| x * w0[i*16 + j], &encoder_mult, j).unwrap());
-            c128[i * 16 + j] = c128[i * 16 + j].keyswitch(&ksk).unwrap();
+            c128.push(c[j].mul_constant_with_padding(w0[i*16 + j], 0.45, 6).unwrap());
         }
     }
-    /*
-    // debug print to see cleartext values and encoder properties
-    println!("Post-multiplication encoder properties:");
-    inspect_encoder(&c128[0]);
-    let mut control: [f64; 8] = [0.0; 8];
-    for i in 0..8 {
-        control[i] = (c128[i*16].decrypt_decode(&sk_in)?)[0];
-    }
-    println!("Multiplication output: {:?}", control);
-    */
     
-    
-    //println!("Adding up hidden layer, first round");
+    //println!("Adding up hidden layer");
     for i in 0..8 {
         // Perform additions in a pyramid pattern to use padding optimally
     	let mut ops = 8;
     	let mut step = 2;
     	let mut off = 1;
-        for _j in 0..2 {
+        for _j in 0..4 {
             for k in 0..ops {
                 let idx = i * 16 + k * step;
                 c128[idx] = c128[idx].add_with_padding(&c128[idx + off])?;
@@ -254,68 +233,9 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     	    off *= 2;
     	}
     }
-    /*
-    // debug print to see cleartext values and encoder properties
-    println!("Post-first-addition encoder properties:");
-    inspect_encoder(&c128[0]);
-    let mut control: [f64; 8] = [0.0; 8];
-    for i in 0..8 {
-        control[i] = (c128[i*16].decrypt_decode(&sk_in)?)[0];
-    }
-    println!("Addition output: {:?}", control);
-    */
-    
-    
-    //println!("Performing recovery bootstrap to free padding bits");
-    for i in 0..32 {
-        let encoder_old = &c128[0].encoders[0];
-        let encoder_out = Encoder::new(encoder_old.get_min(), encoder_old.get_max(), precision, padding)?;
-        c128[i * 4] = c128[i * 4].bootstrap_nth_with_function(&bsk, |x| x, &encoder_out, 0).unwrap();
-        c128[i * 4] = c128[i * 4].keyswitch(&ksk).unwrap();
-    }
-    /*
-    // debug print to see cleartext values and encoder properties
-    println!("Post-recovery encoder properties:");
-    inspect_encoder(&c128[0]);
-    let mut control: [f64; 8] = [0.0; 8];
-    for i in 0..8 {
-        control[i] = (c128[i*16].decrypt_decode(&sk_in)?)[0];
-    }
-    println!("Recovery output: {:?}", control);
-    */
-    
-    
-    // Second round of additions of input layer
-    //println!("Adding up hidden layer, second round");
-    for i in 0..8 {
-        // Continue pyramid where we left off
-    	let mut ops = 2;
-    	let mut step = 8;
-    	let mut off = 4;
-        for _j in 0..2 {
-            for k in 0..ops {
-                let idx = i * 16 + k * step;
-                c128[idx] = c128[idx].add_with_padding(&c128[idx + off])?;
-            }
-    	    ops /= 2;
-    	    step *= 2;
-    	    off *= 2;
-    	}
-    }
-    /*
-    // debug print to see cleartext values and encoder properties
-    println!("Post-second-addition encoder properties:");
-    inspect_encoder(&c128[0]);
-    let mut control: [f64; 8] = [0.0; 8];
-    for i in 0..8 {
-        control[i] = (c128[i*16].decrypt_decode(&sk_in)?)[0];
-    }
-    println!("Addition output: {:?}", control);
-    */
-    
     
     //println!("Performing functional bootstrap to add bias, apply ReLU, and multiply output layer weights");
-    let mut c8: Vec<VectorLWE> = Vec::with_capacity(8);
+    let mut c8: Vec<LWE> = Vec::with_capacity(8);
     for i in 0..8 {
         // Again we choose tight encoder interval and flip for negative weights
         let mut lower = 0.0;
@@ -324,21 +244,10 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
             lower = -upper;
             upper = 0.0;
         }
-        let encoder_out = Encoder::new(lower, upper, precision, padding)?;
-        c8.push(c128[i * 16].bootstrap_nth_with_function(&bsk, |x| w1[i] * f64::max(0.0, x + b0[i]), &encoder_out, 0).unwrap());
+        let encoder_out = Encoder::new(lower, upper, precision, 3)?;
+        c8.push(c128[i * 16].bootstrap_with_function(&bsk, |x| w1[i] * f64::max(0.0, x + b0[i]), &encoder_out).unwrap());
         c8[i] = c8[i].keyswitch(&ksk).unwrap();
     }
-    /*
-    // debug print to see cleartext values and encoder properties
-    println!("Post-ReLU encoder properties:");
-    inspect_encoder(&c8[0]);
-    let mut control: [f64; 8] = [0.0; 8];
-    for i in 0..8 {
-        control[i] = (c8[i].decrypt_decode(&sk_in)?)[0];
-    }
-    println!("Hidden layer output: {:?}", control);
-    */
-    
     
     //println!("Adding up output layer");
     // Another pyramid pattern, this time we can do it in one go and use up all padding
@@ -356,7 +265,7 @@ fn he_forward_pass(model: &tch::CModule, input: &Tensor, sk_in: &LWESecretKey, b
     }
     
     // Decode output and add bias
-    let unbiased_output = (c8[0].decrypt_decode(&sk_in)?)[0];
+    let unbiased_output = (c8[0].decrypt_decode(&sk_in)?);
     Ok(unbiased_output + b1[0])
 }
 
@@ -376,18 +285,23 @@ fn main() -> anyhow::Result<()> {
     
     // key generation takes a while! Load the saved keys instead of regenerating after running once
     //let (sk_in, bsk, ksk) = he_generate_keys()?;
+    println!("\nLoading keys...");
+    let now = Instant::now();
     let (sk_in, bsk, ksk) = he_load_keys()?;
+    println!("  Took {} seconds", now.elapsed().as_secs_f64());
     
     // perform a forward pass homomorphically encrypted
-    //println!("\nHomomorphic forward pass:");
-    //let homomorphic_output = he_forward_pass(&model, &example_input, &sk_in, &bsk, &ksk).expect("Error in homomorphic forward pass!");
-    //println!("Expected: {}, Result: {}", manual_output, homomorphic_output);
+    println!("Homomorphic forward pass:");
+    let now = Instant::now();
+    let homomorphic_output = he_forward_pass(&model, &example_input, &sk_in, &bsk, &ksk).expect("Error in homomorphic forward pass!");
+    println!("Expected: {}, Result: {}", manual_output, homomorphic_output);
+    println!("  Took {} seconds", now.elapsed().as_secs_f64());
     
     // do homomorphic inference on actual data
-    let mut rdr = read_raw_data("../sensitive_data/raw_data.csv").unwrap();
+    /*let mut rdr = read_raw_data("../sensitive_data/raw_data.csv").unwrap();
     let mut counter = 0;
-    let start = 200;
-    let end = 300;
+    let start = 600;
+    let end = 700;
     let mut inferences: Vec<f64> = Vec::with_capacity(end - start);
     for result in rdr.records() {
         let record = result?;
@@ -407,7 +321,7 @@ fn main() -> anyhow::Result<()> {
             break;
         }
     }
-    write_inferences("../sensitive_data/200_to_300.csv", &inferences);
+    write_inferences("../sensitive_data/600_to_700.csv", &inferences);*/
     
     
     Ok(())
