@@ -58,8 +58,8 @@ func bootstrapTime(paramSet int, logSlots int) {
     fmt.Printf("Parameter Set %d: \n", i)
     fmt.Printf("Key Generation ... ")
 
-    // ckksParams := getCkksParamsWithSlots(i, logSlots)
-    ckksParams := getCkksParams(4)
+    ckksParams := getCkksParamsWithSlots(i, logSlots)
+    // ckksParams := getCkksParams(4)
 
     fmt.Printf("with logSlots = %d \n", ckksParams.LogSlots())
 
