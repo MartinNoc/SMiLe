@@ -1,0 +1,7 @@
+OS: Linux-5.11.0-46-generic-x86_64-with-glibc2.29, #51~20.04.1-Ubuntu SMP Fri Jan 7 06:51:40 UTC 2022
+python version: 3.8.10
+attrs version: 21.2.0
+cycler version: 0.10.0
+deap version: 1.3.1
+decorator version: 5.0.9
+hnumpy version: 0.3.0
