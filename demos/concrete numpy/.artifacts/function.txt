@@ -1,0 +1,30 @@
+    def forward(self, q_x: Union[numpy.ndarray, QuantizedArray]) -> numpy.ndarray:
+        """Forward pass with numpy function only.
+
+        Args:
+            q_x (Union[numpy.ndarray, QuantizedArray]): QuantizedArray containing the inputs
+                                                        or a numpy.array containing the q_values.
+                                                        In the latter, the stored input parameters
+                                                        are used:
+                                                        (q_input.scale, q_input.zero_point).
+
+        Returns:
+            (numpy.ndarray): Predictions of the quantized model
+        """
+        # Following "if not" important for compilation as the tracer
+        # need to fall in it the statement (tracing).
+        # If the q_x is a numpy module then we reuse self.q_input parameters
+        # computed during calibration.
+        # Later we might want to only allow nympy.array input
+        if not isinstance(q_x, QuantizedArray):
+            assert self.q_input is not None
+            self.q_input.update_qvalues(q_x)
+            q_x = self.q_input
+
+        for _, layer in self.quant_layers_dict.items():
+            q_x = layer(q_x)
+
+        # mypy compliance
+        assert isinstance(q_x, QuantizedArray)
+
+        return q_x.qvalues
