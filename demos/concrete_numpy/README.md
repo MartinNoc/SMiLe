@@ -8,7 +8,7 @@ Documentation and Installation guide --> [click here](https://docs.zama.ai/concr
 
 Translating a torch NN into concrete.
 
-Network architecture:
-Input layer size: 4
-2 fully connected hidden layers of size 3, ReLU6 activation function
-Output layer: fully connected, size: 1 (k alone), 2 (k, d)
+Network architecture:  
+- Input layer size: 4
+- 2 fully connected hidden layers of size 3, ReLU6 activation function
+- Output layer: fully connected, size: 1 (k alone), 2 (k, d)
