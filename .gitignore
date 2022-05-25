@@ -9,6 +9,9 @@
 *.pdb
 
 
+# data files
+neural_nets/data
+
 
 ## VS projects
 # cache directory
