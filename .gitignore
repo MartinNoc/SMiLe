@@ -8,6 +8,9 @@
 # MSVC Windows builds of rustc generate these, which store debugging infos - should not need it but anyway
 *.pdb
 
+#
+.vscode/
+
 
 # data files
 neural_nets/data
