@@ -1,2 +1,0 @@
-Linux-5.13.0-25-generic-x86_64-with-glibc2.31 #26~20.04.1-Ubuntu SMP Fri Jan 7 16:27:40 UTC 2022
-Python 3.9.5
