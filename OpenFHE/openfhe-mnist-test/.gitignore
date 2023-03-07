@@ -1,0 +1,7 @@
+**/.DS_Store
+/build
+/bin
+/cmake-build-debug
+**/.vscode
+**/.idea
+**/__pycache__
